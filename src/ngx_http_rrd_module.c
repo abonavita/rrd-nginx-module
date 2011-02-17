@@ -160,6 +160,7 @@ ngx_chain_t *ngx_http_rrd_create_chain(ngx_pool_t *pool,
 ngx_uint_t ngx_http_rrd_output_200(ngx_http_request_t *r,
                                   ngx_uint_t sarray_len, ngx_str_t **sarray)
 {
+	ngx_log_t *log = r->connection->log;
     ngx_chain_t *out_chain = ngx_http_rrd_create_chain(r->pool,
                                                        sarray_len, sarray);
     if (NULL == out_chain) {
@@ -269,8 +270,6 @@ ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r)
  */
 void ngx_http_rrd_body_received(ngx_http_request_t *r)
 {
-    ngx_log_t *log = r->connection->log;
-
     ngx_chain_t *body_chain = r->request_body->bufs;
     /* Use the content length as a mw for our value. */
     u_char* copy_idx;

@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <rrd.h>
 
 /* The following could be in a header but there is no point in
  * exporting anything. So we keep it and at the beginning to avoid

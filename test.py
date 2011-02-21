@@ -65,6 +65,7 @@ class TestMethods(unittest.TestCase):
         data = response.read();
         conn.close()
         self.assertRegexpMatches(data, ".*Robin.*");
+        self.assertRegexpMatches(data, ".*78.*");
 
 if __name__ == '__main__':
     unittest.main()

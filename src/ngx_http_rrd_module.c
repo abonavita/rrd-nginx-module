@@ -109,8 +109,8 @@ static ngx_str_t OK_MSG =
 static ngx_str_t ERR_BAD_METHOD_MSG =
         ngx_string(ERR_BAD_METHOD_MSG_CSTR);
 static ngx_str_t ERR_BAD_CONTENT_TYPE_MSG =
-        ngx_string("rrd module supports only application/x-www-form-urlencoded \
-                content type for now.");
+        ngx_string("rrd module supports only application/x-www-form-urlencoded"
+                "content type for now.");
 static ngx_str_t IMAGE_PNG = ngx_string("image/png");
 static ngx_str_t TEXT_PLAIN = ngx_string("text/plain");
 static ngx_str_t WWW_FORM_URLENCODED =
@@ -213,7 +213,7 @@ ngx_http_rrd_handler(ngx_http_request_t *r)
 /*
  *  The handler for POST requests (that update the RRD database). The
  * thing here is to remember that when this is called, the body might
- * not be available. So, you need to register an extra callback that
+ * not be available. So, you must to register an extra callback that
  * will be called when the body is available.
  */
 void ngx_http_rrd_body_received(ngx_http_request_t *r);
@@ -271,20 +271,44 @@ ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r)
 void ngx_http_rrd_body_received(ngx_http_request_t *r)
 {
     ngx_chain_t *body_chain = r->request_body->bufs;
-    /* Use the content length as a mw for our value. */
+    /* Use the content length as a max for our value. */
     u_char* copy_idx;
+    /*  In theory I should check for the size of the body to avoid loading
+     * too much stuff in memory. However this is already handled by nginx
+     * client_max_body_size.
+     */
     u_char* rrd_value = copy_idx =
             ngx_palloc(r->pool, r->headers_in.content_length_n);
     u_char* p;
     ngx_int_t looking_for_eq = 1;
     do {
+        if (body_chain->buf->in_file) {
+            ngx_buf_t * file_buf = body_chain->buf;
+            /* Read it first. This is unfortunately blocking.
+             * TODO : non-blocking.
+             */
+            ngx_buf_t *tb = ngx_create_temp_buf(r->pool, ngx_buf_size(file_buf));
+            ngx_read_file(file_buf->file, tb->start,
+                          ngx_buf_size(file_buf), 0);
+            body_chain->buf = tb;
+        }
         p = body_chain->buf->start;
         while (p!=body_chain->buf->end && looking_for_eq) {
             if ('=' == *(p++)) {
                 looking_for_eq = 0;
             }
         }
-        ngx_memcpy(rrd_value, p, body_chain->buf->end - p);
+        if (!looking_for_eq) {
+            u_char *dst = copy_idx;
+            u_char *src = p;
+            /*
+             *   This won't work if buffer boundary is in the middle of a
+             *  percent-encoded string (which is unlikely to happen I would
+             *  say. Should try to unit test this situation.
+             */
+            ngx_unescape_uri(&dst, &src, body_chain->buf->end - p, 0);
+            copy_idx += dst - p;
+        }
         body_chain = body_chain->next;
     } while (NULL != body_chain);
 
@@ -292,8 +316,12 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
     ngx_http_rrd_module_conf_t *rrd_conf;
     rrd_conf = ngx_http_get_module_loc_conf(r, ngx_http_rrd_module);
 
-    ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name)};
-    ngx_http_rrd_output_200(r, 2, out_str);
+    ngx_str_t val;
+    val.len = 100;
+    val.data = rrd_value;
+    ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name), &val};
+
+    ngx_http_rrd_output_200(r, 3, out_str);
 }
 
 static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)

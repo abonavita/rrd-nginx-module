@@ -38,7 +38,7 @@ class TestMethods(unittest.TestCase):
 
     def test_POST(self):
         conn = httplib.HTTPConnection("localhost:8000")
-        params = urllib.urlencode({'value' : 'N:12:34:56:78'})
+        params = urllib.urlencode({'value' : 'N:12345'})
         headers = {"Content-type": "application/x-www-form-urlencoded",
                    "Accept": "text/plain"}
         conn.request("POST", "/tutu", params, headers)
@@ -48,9 +48,18 @@ class TestMethods(unittest.TestCase):
         conn.close()
         self.assertRegexpMatches(data, ".*Robin.*");
 
+    def test_GET(self):
+        conn = httplib.HTTPConnection("localhost:8000")
+        conn.request("GET", "/tutu")
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        data = response.read();
+        conn.close()
+        self.assertRegexpMatches(data, ".*Robin.*");
+
     def test_POST_BIG(self):
         conn = httplib.HTTPConnection("localhost", 8000, None, 20)
-        params = urllib.urlencode({'value' : 'N:12:34:56:78' * 10000})
+        params = urllib.urlencode({'value' : 'N:12:34:56:78' * 20000})
         conn.putrequest("POST", "/tutu")
         conn.putheader('Content-Type', "application/x-www-form-urlencoded")
         conn.putheader('Content-Length', str(len(params) * 2))
@@ -65,7 +74,6 @@ class TestMethods(unittest.TestCase):
         data = response.read();
         conn.close()
         self.assertRegexpMatches(data, ".*Robin.*");
-        self.assertRegexpMatches(data, ".*78.*");
 
 if __name__ == '__main__':
     unittest.main()

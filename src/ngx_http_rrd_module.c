@@ -111,7 +111,7 @@ static ngx_str_t ERR_BAD_METHOD_MSG =
         ngx_string(ERR_BAD_METHOD_MSG_CSTR);
 static ngx_str_t ERR_BAD_CONTENT_TYPE_MSG =
         ngx_string("rrd module supports only application/x-www-form-urlencoded"
-                "content type for now.");
+                " content type for now.");
 static ngx_str_t IMAGE_PNG = ngx_string("image/png");
 static ngx_str_t TEXT_PLAIN = ngx_string("text/plain");
 static ngx_str_t WWW_FORM_URLENCODED =
@@ -172,6 +172,12 @@ ngx_uint_t ngx_http_rrd_output_200(ngx_http_request_t *r,
     }
     ngx_uint_t rc;
     r->headers_out.status = NGX_HTTP_OK;
+    /* Figure out size of content. */
+    ngx_uint_t i, content_length = 0;
+    for (i = 0; i<sarray_len; i++){
+        content_length += sarray[i]->len;
+    }
+    r->headers_out.content_length_n = content_length;
     rc = ngx_http_send_header(r);
     if (rc != NGX_OK) {
         ngx_log_error(NGX_LOG_ALERT, log, 0,
@@ -250,7 +256,9 @@ ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r)
     }
 
     if (rc == NGX_AGAIN) {
-        /* Don't call me again, but call the body_received. */
+        /*  nginx will call the body_received when needed. Returning
+         * NGX_DONE will prevent nginx from calling ngx_http_finalize_request
+         * (which we will call in body_received) */
         return NGX_DONE;
     }
     if (NGX_OK == rc) {
@@ -266,11 +274,12 @@ ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r)
 }
 /*
  *  Called when the full body has been received. Even if the body is sent in
- *  multiple chinks, this will be called only once when everything has
+ *  multiple chunks, this will be called only once when everything has
  *  been received.
  */
 void ngx_http_rrd_body_received(ngx_http_request_t *r)
 {
+    ngx_log_t *log = r->connection->log;
     ngx_chain_t *body_chain = r->request_body->bufs;
     /* Use the content length as a max for our value. */
     u_char* copy_idx;
@@ -280,21 +289,40 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
      */
     u_char* rrd_value = copy_idx =
             ngx_palloc(r->pool, r->headers_in.content_length_n);
+    if (NULL == rrd_value) {
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                       "Alloc problem @ngx_http_rrd_body_received/1");
+        return ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+    }
     u_char* p;
     ngx_int_t looking_for_eq = 1;
     do {
+        ngx_buf_t *temp_buf;
         if (body_chain->buf->in_file) {
             ngx_buf_t * file_buf = body_chain->buf;
-            /* Read it first. This is unfortunately blocking.
+            /* Read it first in mem. This is unfortunately blocking.
              * TODO : non-blocking.
              */
-            ngx_buf_t *tb = ngx_create_temp_buf(r->pool, ngx_buf_size(file_buf));
-            ngx_read_file(file_buf->file, tb->start,
-                          ngx_buf_size(file_buf), 0);
-            body_chain->buf = tb;
+            temp_buf = ngx_create_temp_buf(r->pool, ngx_buf_size(file_buf));
+            if (NULL == temp_buf) {
+                ngx_log_error(NGX_LOG_ALERT, log, 0,
+                               "Alloc problem @ngx_http_rrd_body_received/2");
+                return ngx_http_finalize_request(r,
+                                         NGX_HTTP_INTERNAL_SERVER_ERROR);
+            }
+            ssize_t read_n;
+            read_n = ngx_read_file(file_buf->file, temp_buf->start,
+                                   ngx_buf_size(file_buf), 0);
+            if (read_n < 0) {
+                /* Problem already logged by read_file. */
+                return ngx_http_finalize_request(r,
+                                         NGX_HTTP_INTERNAL_SERVER_ERROR);
+            }
+        } else {
+            temp_buf = body_chain->buf;
         }
-        p = body_chain->buf->start;
-        while (p!=body_chain->buf->end && looking_for_eq) {
+        p = temp_buf->start;
+        while (p!=temp_buf->last && looking_for_eq) {
             if ('=' == *(p++)) {
                 looking_for_eq = 0;
             }
@@ -307,22 +335,28 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
              *  percent-encoded string (which is unlikely to happen I would
              *  say. Should try to unit test this situation.
              */
-            ngx_unescape_uri(&dst, &src, body_chain->buf->end - p, 0);
-            copy_idx += dst - p;
+            ngx_unescape_uri(&dst, &src, temp_buf->last - p, 0);
+            copy_idx = dst;
         }
         body_chain = body_chain->next;
     } while (NULL != body_chain);
-
+    *copy_idx = '\x0';
 
     ngx_http_rrd_module_conf_t *rrd_conf;
     rrd_conf = ngx_http_get_module_loc_conf(r, ngx_http_rrd_module);
 
-    ngx_str_t val;
-    val.len = 100;
-    val.data = rrd_value;
-    ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name), &val};
-
-    ngx_http_rrd_output_200(r, 3, out_str);
+    int rrd_rc;
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
+                  "rrd_update_r (%V, NULL, 1, %s)", &rrd_conf->db_name,
+                  rrd_value);
+    rrd_rc = rrd_update_r((const char*) rrd_conf->db_name.data, NULL,
+                          1, (const char **)&rrd_value);
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
+                  "rrd_update_r returned: %d", rrd_rc);
+    ngx_uint_t rc;
+    ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name)};
+    rc = ngx_http_rrd_output_200(r, 2, out_str);
+    ngx_http_finalize_request(r, rc);
 }
 
 static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
@@ -331,6 +365,8 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
     rrd_conf = ngx_http_get_module_loc_conf(r, ngx_http_rrd_module);
 
     ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name)};
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                  "rrd module: calling http rrd output");
     return ngx_http_rrd_output_200(r, 2, out_str);
 }
 

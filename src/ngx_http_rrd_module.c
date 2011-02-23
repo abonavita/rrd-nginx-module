@@ -106,6 +106,8 @@ ngx_http_rrd_post_command(ngx_conf_t *cf, void *data, void *conf)
  */
 static ngx_str_t OK_MSG =
         ngx_string("You make the rock-n-roll go round, Robin.");
+static ngx_str_t ERR_UPDATE_MSG =
+        ngx_string("Problem updating database with submitted value: ");
 #define ERR_BAD_METHOD_MSG_CSTR "rrd module supports only GET and POST verbs."
 static ngx_str_t ERR_BAD_METHOD_MSG =
         ngx_string(ERR_BAD_METHOD_MSG_CSTR);
@@ -158,7 +160,7 @@ ngx_chain_t *ngx_http_rrd_create_chain(ngx_pool_t *pool,
 /*
  * Helper function to send an array of ngx_str as response to a request.
  */
-ngx_uint_t ngx_http_rrd_output_200(ngx_http_request_t *r,
+ngx_int_t ngx_http_rrd_output_200(ngx_http_request_t *r,
                                   ngx_uint_t sarray_len, ngx_str_t **sarray)
 {
 	ngx_log_t *log = r->connection->log;
@@ -170,7 +172,7 @@ ngx_uint_t ngx_http_rrd_output_200(ngx_http_request_t *r,
                               "memory alloc pb @ngx_http_rrd_body_received");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    ngx_uint_t rc;
+    ngx_int_t rc;
     r->headers_out.status = NGX_HTTP_OK;
     /* Figure out size of content. */
     ngx_uint_t i, content_length = 0;
@@ -317,6 +319,8 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
                 /* Problem already logged by read_file. */
                 return ngx_http_finalize_request(r,
                                          NGX_HTTP_INTERNAL_SERVER_ERROR);
+            } else {
+                temp_buf->last = temp_buf->start + read_n;
             }
         } else {
             temp_buf = body_chain->buf;
@@ -353,9 +357,17 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
                           1, (const char **)&rrd_value);
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
                   "rrd_update_r returned: %d", rrd_rc);
-    ngx_uint_t rc;
-    ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name)};
-    rc = ngx_http_rrd_output_200(r, 2, out_str);
+    ngx_int_t rc;
+    if (rrd_rc < 0) {
+        ngx_str_t val;
+        val.data = rrd_value;
+        val.len = copy_idx - rrd_value;
+        ngx_str_t* out_str[] = {&ERR_UPDATE_MSG, &(rrd_conf->db_name), &val};
+        rc = ngx_http_rrd_output_200(r, 3, out_str);
+    } else {
+        ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name)};
+        rc = ngx_http_rrd_output_200(r, 2, out_str);
+    }
     ngx_http_finalize_request(r, rc);
 }
 

@@ -46,7 +46,7 @@ class TestMethods(unittest.TestCase):
         self.assertEqual(response.status, 200)
         data = response.read();
         conn.close()
-        self.assertRegexpMatches(data, ".*Robin.*");
+        self.assertRegexpMatches(data, "Robin");
 
     def test_GET(self):
         conn = httplib.HTTPConnection("localhost:8000")
@@ -73,7 +73,7 @@ class TestMethods(unittest.TestCase):
         self.assertEqual(response.status, 200)
         data = response.read();
         conn.close()
-        self.assertRegexpMatches(data, ".*Robin.*");
+        self.assertNotRegexpMatches(data, "Robin");
 
 if __name__ == '__main__':
     unittest.main()

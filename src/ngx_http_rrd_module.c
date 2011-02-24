@@ -71,6 +71,15 @@ static ngx_command_t  ngx_http_rrd_commands[] = {
       ngx_null_command
 };
 
+/*
+ *  Called once per process to initialize the rrd lib.
+ */
+ngx_int_t ngx_http_rrd_init_process(ngx_cycle_t *cycle) {
+    rrd_get_context();
+    ngx_log_error_core(NGX_DEBUG, cycle->log, 0, "rrd: init");
+    return NGX_OK;
+}
+
 ngx_module_t  ngx_http_rrd_module = {
     NGX_MODULE_V1,
     &ngx_http_rrd_module_ctx,      /* module context */
@@ -78,7 +87,7 @@ ngx_module_t  ngx_http_rrd_module = {
     NGX_HTTP_MODULE,               /* module type */
     NULL,                          /* init master */
     NULL,                          /* init module */
-    NULL,                          /* init process */
+    ngx_http_rrd_init_process,     /* init process */
     NULL,                          /* init thread */
     NULL,                          /* exit thread */
     NULL,                          /* exit process */
@@ -353,6 +362,7 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
                   "rrd_update_r (%V, NULL, 1, %s)", &rrd_conf->db_name,
                   rrd_value);
+    rrd_clear_error();
     rrd_rc = rrd_update_r((const char*) rrd_conf->db_name.data, NULL,
                           1, (const char **)&rrd_value);
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,

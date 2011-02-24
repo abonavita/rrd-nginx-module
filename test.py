@@ -48,6 +48,29 @@ class TestMethods(unittest.TestCase):
         conn.close()
         self.assertRegexpMatches(data, "Robin");
 
+    def test_ONE_FAILURE_FOREVER(self):
+        # When an error occured, all subsequent calls will have an error.
+        conn = httplib.HTTPConnection("localhost:8000")
+        paramsOK = urllib.urlencode({'value' : 'N:12345'})
+        headers = {"Content-type": "application/x-www-form-urlencoded",
+                   "Accept": "text/plain"}
+        conn.request("POST", "/tutu", paramsOK, headers)
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        data = response.read();
+        self.assertRegexpMatches(data, "Robin");
+        paramsKO = urllib.urlencode({'value' : 'N:whatever'})
+        conn.request("POST", "/tutu", paramsKO, headers)
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        data = response.read();
+        self.assertRegexpMatches(data, "Problem");
+        conn.request("POST", "/tutu", paramsOK, headers)
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        data = response.read();
+        self.assertRegexpMatches(data, "Robin");
+
     def test_GET(self):
         conn = httplib.HTTPConnection("localhost:8000")
         conn.request("GET", "/tutu")

@@ -464,6 +464,63 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
     ngx_http_finalize_request(r, rc);
 }
 
+/*
+ *  Returns an array of char* that can be passed to rrd_graph. Returns
+ * NULL in case of failure. argc parameter is modified to indicate the
+ * number of arguments actually present in the returned array (because
+ * this depends on the data structure).
+ */
+static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
+                                            ngx_str_t* temp_file_name,
+                                            ngx_str_t* db_name) {
+    *argc = 4;
+    char** argv;
+    argv = ngx_palloc(pool, (*argc) * sizeof(char *));
+    if (NULL == argv) {
+        *argc = -1;
+        return NULL;
+    }
+    /*  Copy it because ngx_str_t does not guarantee the presence of \x0 and
+     * char* requires it.
+     */
+    char* c_temp_file_name =
+            ngx_palloc(pool, (temp_file_name->len + 1) * sizeof(char *));
+    if (NULL == c_temp_file_name) {
+        *argc = -1;
+        return NULL;
+    }
+    ngx_memcpy(c_temp_file_name, temp_file_name->data, temp_file_name->len);
+    c_temp_file_name[temp_file_name->len] = '\x0';
+
+    int c_str_size = 4+5+1+50+1+20+8+1;
+    u_char* c_def_val01 =
+            ngx_palloc(pool, (c_str_size) * sizeof(char *));
+    u_char* last = ngx_slprintf(c_def_val01, c_def_val01+c_str_size-1, "DEF:%s=%V:%s:AVERAGE\x0", "val01", db_name, "resptime");
+    *last = '\x0';
+
+    c_str_size = 6+5+7+1;
+    u_char* c_draw_val01 =
+            ngx_palloc(pool, (c_str_size) * sizeof(char *));
+    last = ngx_slprintf(c_draw_val01, c_draw_val01+c_str_size-1, "LINE2:%s#FF0000\x0", "val01");
+    *last = '\x0';
+    argv[0] = "graph";
+    argv[1] = c_temp_file_name;
+    argv[2] = (char*) c_def_val01;
+    argv[3] = (char*) c_draw_val01;
+    return argv;
+
+}
+static void ngx_http_rrd_free_graph_arg(ngx_pool_t* pool, int argc, char** argv) {
+    int i;
+    for (i=1;i<argc;i++) {
+        ngx_pfree(pool, argv[i]);
+    }
+    ngx_pfree(pool, argv);
+}
+/*
+ *  Handles the GET requests by getting RRD to graph and sending the result
+ * as an HTTP response.
+ */
 static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
 {
     ngx_log_t* log = r->connection->log;
@@ -481,18 +538,18 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
     if (rc != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    char temp_file_name[temp_file.name.len + 1];
-    ngx_memcpy(temp_file_name, temp_file.name.data, temp_file.name.len);
-    temp_file_name[temp_file.name.len] = '\x0';
 
-    /* Prepare ergs for rrdgraph */
-    char* rrd_arg[] = {"graph", temp_file_name, "DEF:mydraw=/var/rrd/taratata.rrd:resptime:AVERAGE", "LINE2:mydraw#FF0000"};
+    /* Prepare args for rrdgraph */
+    int rrd_argc;
+    char** rrd_arg = ngx_http_rrd_create_graph_arg(&rrd_argc, r->pool,
+                               &temp_file.name, &rrd_conf->db_name);
     char    **calcpr;
     int       xsize, ysize;
     double    ymin, ymax;
     rrd_clear_error();
-    int rrd_rc = rrd_graph(sizeof(rrd_arg)/sizeof(char*), rrd_arg,
+    int rrd_rc = rrd_graph(rrd_argc, rrd_arg,
                            &calcpr, &xsize, &ysize, NULL, &ymin, &ymax);
+    ngx_http_rrd_free_graph_arg(r->pool, rrd_argc, rrd_arg);
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
                   "rrd_graph (%s, %s, %s, %s) returned %d.",
                   rrd_arg[0], rrd_arg[1], rrd_arg[2], rrd_arg[3],

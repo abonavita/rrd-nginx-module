@@ -78,7 +78,12 @@ class TestMethods(unittest.TestCase):
         self.assertEqual(response.status, 200)
         data = response.read();
         conn.close()
-        self.assertRegexpMatches(data, ".*Robin.*");
+        self.assertRegexpMatches(data, "^\x89PNG");
+
+    def test_POST_n_GET(self):
+        # POST then GET fails sometimes.
+        self.test_POST()
+        self.test_GET()
 
     def test_POST_BIG(self):
         conn = httplib.HTTPConnection("localhost", 8000, None, 20)

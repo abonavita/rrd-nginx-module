@@ -103,5 +103,24 @@ class TestMethods(unittest.TestCase):
         conn.close()
         self.assertNotRegexpMatches(data, "Robin");
 
+    def test_POST_show_buffers(self):
+        conn = httplib.HTTPConnection("localhost", 8000, None, 20)
+        params = urllib.urlencode({'value' : 'N:12345:678'+'678'*300})
+        conn.putrequest("POST", "/tutu")
+        conn.putheader('Content-Type', "application/x-www-form-urlencoded")
+        conn.putheader('Content-Length', str(len(params)))
+        conn.putheader('Accept', "text/plain")
+        conn.endheaders()
+        conn.send(params[0:6])
+        time.sleep(1)
+        conn.send(params[6:15])
+        time.sleep(1)
+        conn.send(params[15:])
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        data = response.read();
+        conn.close()
+        self.assertNotRegexpMatches(data, "Robin");
+
 if __name__ == '__main__':
     unittest.main()

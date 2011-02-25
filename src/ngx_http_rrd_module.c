@@ -16,10 +16,13 @@
  * declared.
  */
 static char *ngx_http_rrd_post_command(ngx_conf_t *cf, void *data, void *conf);
-static ngx_int_t ngx_http_rrd_handler(ngx_http_request_t *r);
 static void *ngx_http_rrd_create_loc_conf(ngx_conf_t *conf);
+static char *ngx_http_rrd_merge_loc_conf(ngx_conf_t *cf,
+                                          void *parent, void *child);
+static ngx_int_t ngx_http_rrd_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r);
 static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r);
+static void ngx_http_rrd_body_received(ngx_http_request_t *r);
 
 /* Module declaration */
 static ngx_http_module_t  ngx_http_rrd_module_ctx = {
@@ -33,26 +36,46 @@ static ngx_http_module_t  ngx_http_rrd_module_ctx = {
     NULL,                          /* merge server configuration */
 
     ngx_http_rrd_create_loc_conf,  /* create location configuration */
-    NULL                           /* merge location configuration */
+    ngx_http_rrd_merge_loc_conf    /* merge location configuration */
 };
-
-
 
 /* Structure storing configuration specific to this module. */
 typedef struct {
     ngx_str_t db_name; /* Name of rrd database. */
-} ngx_http_rrd_module_conf_t;
+    ngx_path_t* rrd_image_temp_path;
+} ngx_http_rrd_loc_conf_t;
+
+/* Default values. */
+static ngx_path_init_t  ngx_http_rrd_temp_path = {
+    ngx_string("rrd_temp"), { 0, 0, 0 }
+};
+
 /* The module configuration creation function. */
 static void *ngx_http_rrd_create_loc_conf(ngx_conf_t *conf)
 {
-    ngx_http_rrd_module_conf_t  *rrd_conf;
+    ngx_http_rrd_loc_conf_t  *rrd_conf;
 
-    rrd_conf = ngx_pcalloc(conf->pool, sizeof(ngx_http_rrd_module_conf_t));
+    rrd_conf = ngx_pcalloc(conf->pool, sizeof(ngx_http_rrd_loc_conf_t));
     if (rrd_conf == NULL) {
         return NGX_CONF_ERROR;
     }
     /*ngx_str_null(&(rrd_conf->db_name));*/
     return rrd_conf;
+}
+/*  Merges location configurations. */
+static char *
+ngx_http_rrd_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
+    ngx_http_rrd_loc_conf_t* plcf = parent;
+    ngx_http_rrd_loc_conf_t* clcf = child;
+
+    if (ngx_conf_merge_path_value(cf, &clcf->rrd_image_temp_path,
+                              plcf->rrd_image_temp_path,
+                              &ngx_http_rrd_temp_path)
+        != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
+    }
+    return NGX_CONF_OK;
 }
 
 /* Commands offered by this module. */
@@ -65,8 +88,15 @@ static ngx_command_t  ngx_http_rrd_commands[] = {
       NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
       ngx_conf_set_str_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_rrd_module_conf_t, db_name),
+      offsetof(ngx_http_rrd_loc_conf_t, db_name),
       &ngx_http_rrd_post},
+
+    { ngx_string("rrd_image_temp_path"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1234,
+      ngx_conf_set_path_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_rrd_loc_conf_t, rrd_image_temp_path),
+      NULL },
 
       ngx_null_command
 };
@@ -74,7 +104,7 @@ static ngx_command_t  ngx_http_rrd_commands[] = {
 /*
  *  Called once per process to initialize the rrd lib.
  */
-ngx_int_t ngx_http_rrd_init_process(ngx_cycle_t *cycle) {
+static ngx_int_t ngx_http_rrd_init_process(ngx_cycle_t *cycle) {
     rrd_get_context();
     ngx_log_error_core(NGX_DEBUG, cycle->log, 0, "rrd: init");
     return NGX_OK;
@@ -117,6 +147,8 @@ static ngx_str_t OK_MSG =
         ngx_string("You make the rock-n-roll go round, Robin.");
 static ngx_str_t ERR_UPDATE_MSG =
         ngx_string("Problem updating database with submitted value: ");
+static ngx_str_t ERR_GRAPH_MSG =
+        ngx_string("Problem graphing database.");
 #define ERR_BAD_METHOD_MSG_CSTR "rrd module supports only GET and POST verbs."
 static ngx_str_t ERR_BAD_METHOD_MSG =
         ngx_string(ERR_BAD_METHOD_MSG_CSTR);
@@ -169,7 +201,7 @@ ngx_chain_t *ngx_http_rrd_create_chain(ngx_pool_t *pool,
 /*
  * Helper function to send an array of ngx_str as response to a request.
  */
-ngx_int_t ngx_http_rrd_output_200(ngx_http_request_t *r,
+static ngx_int_t ngx_http_rrd_output_200(ngx_http_request_t *r,
                                   ngx_uint_t sarray_len, ngx_str_t **sarray)
 {
 	ngx_log_t *log = r->connection->log;
@@ -198,9 +230,60 @@ ngx_int_t ngx_http_rrd_output_200(ngx_http_request_t *r,
 
     return ngx_http_output_filter(r, out_chain);
 }
+/*
+ * Helper function to send a temporary file (image) as 200 response.
+ */
+static ngx_int_t ngx_http_rrd_png_file_200(ngx_http_request_t *r,
+                                  ngx_file_t* src_file)
+{
+    ngx_log_t *log = r->connection->log;
+
+    /* Create chain of one buffer with the file */
+    ngx_chain_t *out_chain = ngx_alloc_chain_link(r->pool);
+    if (NULL == out_chain) {
+        /* nothing else I can do... */
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                              "chain alloc pb @ngx_http_rrd_png_file_200");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_buf_t *buf = ngx_alloc_buf(r->pool);
+    if (NULL == buf) {
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                              "buffer alloc pb @ngx_http_rrd_png_file_200");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    off_t seek_size = lseek(src_file->fd, 0, SEEK_END);
+    if (seek_size < 0) {
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                              "Unable to read file size. fd:%d, r:%O");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    buf->file = src_file;
+    buf->in_file = 1;
+    buf->last_buf = 1;
+    buf->last_in_chain = 1;
+    buf->file_pos = 0;
+    buf->file_last = seek_size;
+    out_chain->buf = buf;
+    out_chain->next = NULL;
+
+    /* Header. */
+    ngx_int_t rc;
+    r->headers_out.status = NGX_HTTP_OK;
+    r->headers_out.content_length_n = seek_size;
+    r->headers_out.content_type.data = IMAGE_PNG.data;
+    r->headers_out.content_type.len = IMAGE_PNG.len;
+    rc = ngx_http_send_header(r);
+    if (rc != NGX_OK) {
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                              "pb sending header @ngx_http_rrd_png_file_200");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    return ngx_http_output_filter(r, out_chain);
+}
 /* The actual handler that will process requests. */
-ngx_int_t
-ngx_http_rrd_handler(ngx_http_request_t *r)
+ngx_int_t ngx_http_rrd_handler(ngx_http_request_t *r)
 {
     ngx_log_t                 *log;
     log = r->connection->log;
@@ -234,7 +317,6 @@ ngx_http_rrd_handler(ngx_http_request_t *r)
  * not be available. So, you must to register an extra callback that
  * will be called when the body is available.
  */
-void ngx_http_rrd_body_received(ngx_http_request_t *r);
 ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r)
 {
     ngx_log_t *log = r->connection->log;
@@ -306,13 +388,14 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
         return ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
     }
     u_char* p;
+    /* TODO: rewrite this to first READ in mem, then look for = and urldecode*/
     ngx_int_t looking_for_eq = 1;
     do {
         ngx_buf_t *temp_buf;
         if (body_chain->buf->in_file) {
             ngx_buf_t * file_buf = body_chain->buf;
             /* Read it first in mem. This is unfortunately blocking.
-             * TODO : non-blocking.
+             * TODO : non-blocking. HttpUploadModule ?
              */
             temp_buf = ngx_create_temp_buf(r->pool, ngx_buf_size(file_buf));
             if (NULL == temp_buf) {
@@ -355,7 +438,7 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
     } while (NULL != body_chain);
     *copy_idx = '\x0';
 
-    ngx_http_rrd_module_conf_t *rrd_conf;
+    ngx_http_rrd_loc_conf_t *rrd_conf;
     rrd_conf = ngx_http_get_module_loc_conf(r, ngx_http_rrd_module);
 
     int rrd_rc;
@@ -383,12 +466,42 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
 
 static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
 {
-    ngx_http_rrd_module_conf_t *rrd_conf;
+    ngx_log_t* log = r->connection->log;
+    ngx_http_rrd_loc_conf_t *rrd_conf;
     rrd_conf = ngx_http_get_module_loc_conf(r, ngx_http_rrd_module);
 
-    ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name)};
-    ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                  "rrd module: calling http rrd output");
-    return ngx_http_rrd_output_200(r, 2, out_str);
+    /* Prepare file for rrdgraph */
+    ngx_file_t temp_file;
+    ngx_int_t rc;
+    temp_file.fd = NGX_INVALID_FILE;
+    temp_file.log = r->connection->log;
+    /* Persistent needed to retrieve size and clean afterwards. */
+    rc = ngx_create_temp_file(&temp_file, rrd_conf->rrd_image_temp_path, r->pool,
+                              1, 1, 0);
+    if (rc != NGX_OK) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    char temp_file_name[temp_file.name.len + 1];
+    ngx_memcpy(temp_file_name, temp_file.name.data, temp_file.name.len);
+    temp_file_name[temp_file.name.len] = '\x0';
+
+    /* Prepare ergs for rrdgraph */
+    char* rrd_arg[] = {"graph", temp_file_name, "DEF:mydraw=/var/rrd/taratata.rrd:resptime:AVERAGE", "LINE2:mydraw#FF0000"};
+    char    **calcpr;
+    int       xsize, ysize;
+    double    ymin, ymax;
+    rrd_clear_error();
+    int rrd_rc = rrd_graph(sizeof(rrd_arg)/sizeof(char*), rrd_arg,
+                           &calcpr, &xsize, &ysize, NULL, &ymin, &ymax);
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
+                  "rrd_graph (%s, %s, %s, %s) returned %d.",
+                  rrd_arg[0], rrd_arg[1], rrd_arg[2], rrd_arg[3],
+                  rrd_rc);
+    if (rrd_rc < 0) {
+        ngx_str_t* out_str[] = {&ERR_GRAPH_MSG};
+        return ngx_http_rrd_output_200(r, sizeof(out_str)/sizeof(ngx_str_t*), out_str);
+    } else {
+        return ngx_http_rrd_png_file_200(r, &temp_file);
+    }
 }
 

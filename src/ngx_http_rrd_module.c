@@ -446,6 +446,7 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
                   "rrd_update_r (%V, NULL, 1, %s)", &rrd_conf->db_name,
                   rrd_value);
     rrd_clear_error();
+    /* TODO: fix potential problem wih db_name.data not null-terminated */
     rrd_rc = rrd_update_r((const char*) rrd_conf->db_name.data, NULL,
                           1, (const char **)&rrd_value);
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
@@ -473,40 +474,64 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
 static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
                                             ngx_str_t* temp_file_name,
                                             ngx_str_t* db_name) {
-    *argc = 4;
+    /* TODO:null-terminated ngx_str, check rc, call rrd_info_free. */
+    rrd_clear_error();
+    rrd_info_t* rrd_info = rrd_info_r((char*) db_name->data);
+    if (NULL==rrd_info) {
+        ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
+                       "Problem retrieving rrd_info for db %V", db_name);
+        return NULL;
+    }
+    int ds_count = 1;
+    char* ds_name[] = {"resptime"};
+    char* first_cf = "AVERAGE";
+    *argc = 2 + 2 * ds_count; /* "graph"+png_filename+2 args by datasource */
     char** argv;
     argv = ngx_palloc(pool, (*argc) * sizeof(char *));
     if (NULL == argv) {
+        ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
+                       "Alloc problem @ngx_http_rrd_create_graph_arg/1");
         *argc = -1;
         return NULL;
     }
+    argv[0] = "graph";
+
     /*  Copy it because ngx_str_t does not guarantee the presence of \x0 and
      * char* requires it.
      */
     char* c_temp_file_name =
             ngx_palloc(pool, (temp_file_name->len + 1) * sizeof(char *));
     if (NULL == c_temp_file_name) {
+        ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
+                       "Alloc problem @ngx_http_rrd_create_graph_arg/2");
         *argc = -1;
         return NULL;
     }
     ngx_memcpy(c_temp_file_name, temp_file_name->data, temp_file_name->len);
     c_temp_file_name[temp_file_name->len] = '\x0';
-
-    int c_str_size = 4+5+1+50+1+20+8+1;
-    u_char* c_def_val01 =
-            ngx_palloc(pool, (c_str_size) * sizeof(char *));
-    u_char* last = ngx_slprintf(c_def_val01, c_def_val01+c_str_size-1, "DEF:%s=%V:%s:AVERAGE\x0", "val01", db_name, "resptime");
-    *last = '\x0';
-
-    c_str_size = 6+5+7+1;
-    u_char* c_draw_val01 =
-            ngx_palloc(pool, (c_str_size) * sizeof(char *));
-    last = ngx_slprintf(c_draw_val01, c_draw_val01+c_str_size-1, "LINE2:%s#FF0000\x0", "val01");
-    *last = '\x0';
-    argv[0] = "graph";
     argv[1] = c_temp_file_name;
-    argv[2] = (char*) c_def_val01;
-    argv[3] = (char*) c_draw_val01;
+
+    int i;
+    int c_str_size;
+    int first_cf_len = strlen(first_cf);
+    for (i = 0; i<ds_count && i<99; i++) {
+        c_str_size = 7+2+1+db_name->len+1+strlen(ds_name[i])+1+first_cf_len+1;
+        u_char* c_def_val_i =
+                ngx_palloc(pool, (c_str_size) * sizeof(char *));
+        u_char* last = ngx_slprintf(c_def_val_i, c_def_val_i+c_str_size-1,
+                             "DEF:val%02i=%V:%s:%s", i, db_name, ds_name[i],
+                             first_cf);
+        *last = '\x0';
+        argv[2+i*2] = (char*) c_def_val_i;
+
+        c_str_size = 9+2+7+1;
+        u_char* c_draw_val_i =
+                ngx_palloc(pool, (c_str_size) * sizeof(char *));
+        last = ngx_slprintf(c_draw_val_i, c_draw_val_i+c_str_size-1,
+                            "LINE2:val%02i#FF0000", i);
+        *last = '\x0';
+        argv[3+i*2] = (char*) c_draw_val_i;
+    }
     return argv;
 
 }
@@ -515,7 +540,9 @@ static void ngx_http_rrd_free_graph_arg(ngx_pool_t* pool, int argc, char** argv)
     for (i=1;i<argc;i++) {
         ngx_pfree(pool, argv[i]);
     }
-    ngx_pfree(pool, argv);
+    if (argc > 0) {
+        ngx_pfree(pool, argv);
+    }
 }
 /*
  *  Handles the GET requests by getting RRD to graph and sending the result
@@ -540,7 +567,7 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
     }
 
     /* Prepare args for rrdgraph */
-    int rrd_argc;
+    int rrd_argc = -1;
     char** rrd_arg = ngx_http_rrd_create_graph_arg(&rrd_argc, r->pool,
                                &temp_file.name, &rrd_conf->db_name);
     char    **calcpr;

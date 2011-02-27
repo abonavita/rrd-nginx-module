@@ -8,6 +8,8 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#define RRD_EXPORT_DEPRECATED /* Needed to have rrd_t declared */
+#define RRD_READONLY    (1<<0)
 #include <rrd.h>
 
 /* The following could be in a header but there is no point in
@@ -453,6 +455,7 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
                   "rrd_update_r returned: %d", rrd_rc);
     ngx_int_t rc;
     if (rrd_rc < 0) {
+//        char * rrd_err = rrd_get_error();
         ngx_str_t val;
         val.data = rrd_value;
         val.len = copy_idx - rrd_value;
@@ -474,25 +477,34 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
 static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
                                             ngx_str_t* temp_file_name,
                                             ngx_str_t* db_name) {
+    char** argv = NULL;
+    *argc = -1;
     /* TODO:null-terminated ngx_str, check rc, call rrd_info_free. */
+    /*  rrd_info_r doesn't do the job for me: it makes the info human readable
+     * and I need it computer-readable. It does somehting I would have to
+     * undo by crappy parsing code. Instead, I directly use the structure and
+     * the info I need.
+     */
     rrd_clear_error();
-    rrd_info_t* rrd_info = rrd_info_r((char*) db_name->data);
-    if (NULL==rrd_info) {
+    rrd_t rrd;
+    rrd_init(&rrd);
+    rrd_file_t *rrd_file;
+    rrd_file = rrd_open((const char*) db_name->data, &rrd, RRD_READONLY);
+    if (rrd_file == NULL) {
         ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
-                       "Problem retrieving rrd_info for db %V", db_name);
-        return NULL;
+                       "Problem retrieving rrd_info for db %V:%s", db_name,
+                       rrd_get_error());
+        goto rrd_err_free;
     }
-    int ds_count = 1;
-    char* ds_name[] = {"resptime"};
-    char* first_cf = "AVERAGE";
+    int ds_count = rrd.stat_head->ds_cnt;
+    char* first_cf = rrd.rra_def[0].cf_nam;
     *argc = 2 + 2 * ds_count; /* "graph"+png_filename+2 args by datasource */
-    char** argv;
     argv = ngx_palloc(pool, (*argc) * sizeof(char *));
     if (NULL == argv) {
         ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
                        "Alloc problem @ngx_http_rrd_create_graph_arg/1");
         *argc = -1;
-        return NULL;
+        goto rrd_err_close;
     }
     argv[0] = "graph";
 
@@ -505,7 +517,9 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
         ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
                        "Alloc problem @ngx_http_rrd_create_graph_arg/2");
         *argc = -1;
-        return NULL;
+        ngx_pfree(pool, argv);
+        argv = NULL;
+        goto rrd_err_close;
     }
     ngx_memcpy(c_temp_file_name, temp_file_name->data, temp_file_name->len);
     c_temp_file_name[temp_file_name->len] = '\x0';
@@ -515,11 +529,11 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
     int c_str_size;
     int first_cf_len = strlen(first_cf);
     for (i = 0; i<ds_count && i<99; i++) {
-        c_str_size = 7+2+1+db_name->len+1+strlen(ds_name[i])+1+first_cf_len+1;
+        c_str_size = 7+2+1+db_name->len+1+strlen(rrd.ds_def[i].ds_nam)+1+first_cf_len+1;
         u_char* c_def_val_i =
                 ngx_palloc(pool, (c_str_size) * sizeof(char *));
         u_char* last = ngx_slprintf(c_def_val_i, c_def_val_i+c_str_size-1,
-                             "DEF:val%02i=%V:%s:%s", i, db_name, ds_name[i],
+                             "DEF:val%02i=%V:%s:%s", i, db_name, rrd.ds_def[i].ds_nam,
                              first_cf);
         *last = '\x0';
         argv[2+i*2] = (char*) c_def_val_i;
@@ -532,8 +546,11 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
         *last = '\x0';
         argv[3+i*2] = (char*) c_draw_val_i;
     }
+  rrd_err_close:
+    rrd_close(rrd_file);
+  rrd_err_free:
+    rrd_free(&rrd);
     return argv;
-
 }
 static void ngx_http_rrd_free_graph_arg(ngx_pool_t* pool, int argc, char** argv) {
     int i;

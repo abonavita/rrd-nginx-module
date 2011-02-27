@@ -80,6 +80,21 @@ class TestMethods(unittest.TestCase):
         conn.close()
         self.assertRegexpMatches(data, "^\x89PNG");
 
+    def test_GET_twice(self):
+        self.test_GET()
+        conn = httplib.HTTPConnection("localhost:8000")
+        conn.request("GET", "/tutug")
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        data = response.read();
+        self.assertRegexpMatches(data, "^\x89PNG");
+        conn.request("GET", "/tutug")
+        response = conn.getresponse()
+        self.assertEqual(response.status, 200)
+        data = response.read();
+        conn.close()
+        self.assertRegexpMatches(data, "^\x89PNG");
+
     def test_POST_n_GET(self):
         # POST then GET fails sometimes.
         self.test_POST()

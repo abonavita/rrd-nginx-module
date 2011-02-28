@@ -248,7 +248,7 @@ static ngx_int_t ngx_http_rrd_png_file_200(ngx_http_request_t *r,
                               "chain alloc pb @ngx_http_rrd_png_file_200");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    ngx_buf_t *buf = ngx_alloc_buf(r->pool);
+    ngx_buf_t *buf = ngx_calloc_buf(r->pool);
     if (NULL == buf) {
         ngx_log_error(NGX_LOG_ALERT, log, 0,
                               "buffer alloc pb @ngx_http_rrd_png_file_200");
@@ -266,6 +266,8 @@ static ngx_int_t ngx_http_rrd_png_file_200(ngx_http_request_t *r,
     buf->last_in_chain = 1;
     buf->file_pos = 0;
     buf->file_last = seek_size;
+    buf->temp_file = 1;
+    buf->temporary = 0;
     out_chain->buf = buf;
     out_chain->next = NULL;
 

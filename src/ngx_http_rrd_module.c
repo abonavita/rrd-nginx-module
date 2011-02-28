@@ -17,7 +17,8 @@
  * compiler complaints about things being used without being
  * declared.
  */
-static char *ngx_http_rrd_post_command(ngx_conf_t *cf, void *data, void *conf);
+static char *ngx_http_rrd_directive(ngx_conf_t *cf, ngx_command_t* cmd,
+                                    void *conf);
 static void *ngx_http_rrd_create_loc_conf(ngx_conf_t *conf);
 static char *ngx_http_rrd_merge_loc_conf(ngx_conf_t *cf,
                                           void *parent, void *child);
@@ -43,7 +44,7 @@ static ngx_http_module_t  ngx_http_rrd_module_ctx = {
 
 /* Structure storing configuration specific to this module. */
 typedef struct {
-    ngx_str_t db_name; /* Name of rrd database. */
+    char* db_name_cstyle; /* 0-terminated version. */
     ngx_path_t* rrd_image_temp_path;
 } ngx_http_rrd_loc_conf_t;
 
@@ -81,17 +82,14 @@ ngx_http_rrd_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
 }
 
 /* Commands offered by this module. */
-static ngx_conf_post_t ngx_http_rrd_post = {
-        ngx_http_rrd_post_command
-};
 static ngx_command_t  ngx_http_rrd_commands[] = {
 
     { ngx_string("rrd"),
       NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_str_slot,
+      ngx_http_rrd_directive,
       NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_rrd_loc_conf_t, db_name),
-      &ngx_http_rrd_post},
+      0,
+      NULL},
 
     { ngx_string("rrd_image_temp_path"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1234,
@@ -131,13 +129,31 @@ ngx_module_t  ngx_http_rrd_module = {
  * of this command is handled by ngx_conf_set_str_slot, then this
  * function is called. */
 static char*
-ngx_http_rrd_post_command(ngx_conf_t *cf, void *data, void *conf)
+ngx_http_rrd_directive(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
+    /* Set the content handler. */
     ngx_http_core_loc_conf_t  *core_loc_conf;
-
     core_loc_conf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-
     core_loc_conf->handler = ngx_http_rrd_handler;
+
+    /* conf* is the module configuration which you have to cast... */
+    ngx_http_rrd_loc_conf_t* rrd_conf = conf;
+    if (rrd_conf->db_name_cstyle) {
+        return "is duplicate";
+    }
+    /* Value read by nginx */
+    ngx_str_t* value;
+    value = cf->args->elts;
+
+    /*  Create a c-style version (needed to interface with rrd). */
+    rrd_conf->db_name_cstyle =
+            ngx_palloc(cf->pool, sizeof(char) * (value[1].len+1));
+    if (NULL == rrd_conf->db_name_cstyle) {
+        return NGX_CONF_ERROR;
+    }
+    ngx_memcpy(rrd_conf->db_name_cstyle, value[1].data,
+               value[1].len);
+    *(rrd_conf->db_name_cstyle + value[1].len) = '\x0';
 
     return NGX_CONF_OK;
 }
@@ -447,25 +463,25 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
 
     int rrd_rc;
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
-                  "rrd_update_r (%V, NULL, 1, %s)", &rrd_conf->db_name,
+                  "rrd_update_r (%s, NULL, 1, %s)", rrd_conf->db_name_cstyle,
                   rrd_value);
     rrd_clear_error();
     /* TODO: fix potential problem wih db_name.data not null-terminated */
-    rrd_rc = rrd_update_r((const char*) rrd_conf->db_name.data, NULL,
+    rrd_rc = rrd_update_r(rrd_conf->db_name_cstyle, NULL,
                           1, (const char **)&rrd_value);
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
                   "rrd_update_r returned: %d", rrd_rc);
     ngx_int_t rc;
     if (rrd_rc < 0) {
-//        char * rrd_err = rrd_get_error();
+//        char * rrd_err = rrd_get_error(); TODO
         ngx_str_t val;
         val.data = rrd_value;
         val.len = copy_idx - rrd_value;
-        ngx_str_t* out_str[] = {&ERR_UPDATE_MSG, &(rrd_conf->db_name), &val};
-        rc = ngx_http_rrd_output_200(r, 3, out_str);
-    } else {
-        ngx_str_t* out_str[] = {&OK_MSG, &(rrd_conf->db_name)};
+        ngx_str_t* out_str[] = {&ERR_UPDATE_MSG, &val};
         rc = ngx_http_rrd_output_200(r, 2, out_str);
+    } else {
+        ngx_str_t* out_str[] = {&OK_MSG};
+        rc = ngx_http_rrd_output_200(r, 1, out_str);
     }
     ngx_http_finalize_request(r, rc);
 }
@@ -478,7 +494,7 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
  */
 static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
                                             ngx_str_t* temp_file_name,
-                                            ngx_str_t* db_name) {
+                                            char* db_name) {
     char** argv = NULL;
     *argc = -1;
     /* TODO:null-terminated ngx_str, check rc, call rrd_info_free. */
@@ -491,10 +507,10 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
     rrd_t rrd;
     rrd_init(&rrd);
     rrd_file_t *rrd_file;
-    rrd_file = rrd_open((const char*) db_name->data, &rrd, RRD_READONLY);
+    rrd_file = rrd_open(db_name, &rrd, RRD_READONLY);
     if (rrd_file == NULL) {
         ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
-                       "Problem retrieving rrd_info for db %V:%s", db_name,
+                       "Problem retrieving rrd_info for db %s:%s", db_name,
                        rrd_get_error());
         goto rrd_err_free;
     }
@@ -514,7 +530,7 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
      * char* requires it.
      */
     char* c_temp_file_name =
-            ngx_palloc(pool, (temp_file_name->len + 1) * sizeof(char *));
+            ngx_palloc(pool, (temp_file_name->len + 1) * sizeof(char));
     if (NULL == c_temp_file_name) {
         ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
                        "Alloc problem @ngx_http_rrd_create_graph_arg/2");
@@ -530,19 +546,20 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
     int i;
     int c_str_size;
     int first_cf_len = strlen(first_cf);
+    int db_name_len = strlen(db_name);
     for (i = 0; i<ds_count && i<99; i++) {
-        c_str_size = 7+2+1+db_name->len+1+strlen(rrd.ds_def[i].ds_nam)+1+first_cf_len+1;
+        c_str_size = 7+2+1+db_name_len+1+strlen(rrd.ds_def[i].ds_nam)+1+first_cf_len+1;
         u_char* c_def_val_i =
-                ngx_palloc(pool, (c_str_size) * sizeof(char *));
+                ngx_palloc(pool, (c_str_size) * sizeof(char));
         u_char* last = ngx_slprintf(c_def_val_i, c_def_val_i+c_str_size-1,
-                             "DEF:val%02i=%V:%s:%s", i, db_name, rrd.ds_def[i].ds_nam,
+                             "DEF:val%02i=%s:%s:%s", i, db_name, rrd.ds_def[i].ds_nam,
                              first_cf);
         *last = '\x0';
         argv[2+i*2] = (char*) c_def_val_i;
 
         c_str_size = 9+2+7+1;
         u_char* c_draw_val_i =
-                ngx_palloc(pool, (c_str_size) * sizeof(char *));
+                ngx_palloc(pool, (c_str_size) * sizeof(char));
         last = ngx_slprintf(c_draw_val_i, c_draw_val_i+c_str_size-1,
                             "LINE2:val%02i#FF0000", i);
         *last = '\x0';
@@ -588,7 +605,7 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
     /* Prepare args for rrdgraph */
     int rrd_argc = -1;
     char** rrd_arg = ngx_http_rrd_create_graph_arg(&rrd_argc, r->pool,
-                               &temp_file.name, &rrd_conf->db_name);
+                               &temp_file.name, rrd_conf->db_name_cstyle);
     char    **calcpr;
     int       xsize, ysize;
     double    ymin, ymax;

@@ -62,7 +62,7 @@ class TestMethods(unittest.TestCase):
         paramsKO = urllib.urlencode({'value' : 'N:whatever'})
         conn.request("POST", "/tutu", paramsKO, headers)
         response = conn.getresponse()
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 500)
         data = response.read();
         self.assertRegexpMatches(data, "Problem");
         conn.request("POST", "/tutu", paramsOK, headers)
@@ -102,15 +102,15 @@ class TestMethods(unittest.TestCase):
         conn.putheader('Content-Length', str(len(params) * 2))
         conn.putheader('Accept', "text/plain")
         conn.endheaders()
-        time.sleep(4)
+        time.sleep(1)
         conn.send(params)
-        time.sleep(4)
+        time.sleep(1)
         conn.send(params)
         response = conn.getresponse()
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 500)
         data = response.read();
         conn.close()
-        self.assertNotRegexpMatches(data, "Robin");
+        self.assertRegexpMatches(data, "Problem");
 
     def test_POST_show_buffers(self):
         conn = httplib.HTTPConnection("localhost", 8000, None, 20)
@@ -126,10 +126,10 @@ class TestMethods(unittest.TestCase):
         time.sleep(1)
         conn.send(params[15:])
         response = conn.getresponse()
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 500)
         data = response.read();
         conn.close()
-        self.assertNotRegexpMatches(data, "Robin");
+        self.assertRegexpMatches(data, "Problem");
 
 if __name__ == '__main__':
     unittest.main()

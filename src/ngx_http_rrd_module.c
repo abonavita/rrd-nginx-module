@@ -161,10 +161,6 @@ ngx_http_rrd_directive(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 /* The messages (OK, errors) that can be sent by this module. Note that
  * the important thing returned is the status (this is a REST-like API).
  */
-static ngx_str_t OK_MSG =
-        ngx_string("You make the rock-n-roll go round, Robin.");
-static ngx_str_t ERR_UPDATE_MSG =
-        ngx_string("Problem updating database with submitted value: ");
 static ngx_str_t ERR_GRAPH_MSG =
         ngx_string("Problem graphing database.");
 #define ERR_BAD_METHOD_MSG_CSTR "rrd module supports only GET and POST verbs."
@@ -215,6 +211,48 @@ ngx_chain_t *ngx_http_rrd_create_chain(ngx_pool_t *pool,
     buf[i].last_in_chain = 1;
     buf[i].last_buf = 1;
     return out_chain;
+}
+/*
+ * Helper function to send a formatted string as response.
+ */
+static ngx_int_t ngx_http_rrd_outprintf(ngx_http_request_t *r,
+                              ngx_uint_t http_status, const char* fmt, ...) {
+    ngx_log_t *log = r->connection->log;
+    ngx_buf_t *buf = ngx_create_temp_buf(r->pool, 2048);
+    if (NULL == buf) {
+        /* nothing else I can do... */
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                      "buf alloc pb @ngx_http_rrd_outprintf");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_chain_t *out_chain = ngx_alloc_chain_link(r->pool);
+    if (NULL == out_chain) {
+        /* nothing else I can do... */
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                      "chain alloc pb @ngx_http_rrd_outprintf");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    out_chain->buf = buf;
+    out_chain->next = NULL;
+
+    va_list args;
+    va_start(args, fmt);
+    buf->last = ngx_vslprintf(buf->start, buf->end, fmt, args);
+    va_end(args);
+    buf->last_buf = 1;
+    buf->last_in_chain = 1;
+
+    ngx_int_t rc;
+    r->headers_out.status = http_status;
+    r->headers_out.content_length_n = buf->last - buf->start;
+    rc = ngx_http_send_header(r);
+    if (rc != NGX_OK) {
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                              "pb sending header @ngx_http_rrd_outprintf");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    return ngx_http_output_filter(r, out_chain);
 }
 /*
  * Helper function to send an array of ngx_str as response to a request.
@@ -476,14 +514,13 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
         char * rrd_err = rrd_get_error();
         ngx_log_error(NGX_LOG_ALERT, log, 0,
                        "Problem on rrd_update_r: %s", rrd_err);
-        ngx_str_t val;
-        val.data = rrd_value;
-        val.len = copy_idx - rrd_value;
-        ngx_str_t* out_str[] = {&ERR_UPDATE_MSG, &val};
-        rc = ngx_http_rrd_output_200(r, 2, out_str);
+        rc = ngx_http_rrd_outprintf(r, NGX_HTTP_INTERNAL_SERVER_ERROR,
+                       "Problem (%s) updating %s with %s.",
+                       rrd_err, rrd_conf->db_name_cstyle, &rrd_value);
     } else {
-        ngx_str_t* out_str[] = {&OK_MSG};
-        rc = ngx_http_rrd_output_200(r, 1, out_str);
+        rc = ngx_http_rrd_outprintf(r, NGX_HTTP_OK,
+                       "Updated %s. You make the rock-n-roll go round, Robin.",
+                       rrd_conf->db_name_cstyle);
     }
     ngx_http_finalize_request(r, rc);
 }

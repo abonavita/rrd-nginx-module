@@ -218,6 +218,7 @@ ngx_chain_t *ngx_http_rrd_create_chain(ngx_pool_t *pool,
 }
 /*
  * Helper function to send an array of ngx_str as response to a request.
+ * TODO : Kill
  */
 static ngx_int_t ngx_http_rrd_output_200(ngx_http_request_t *r,
                                   ngx_uint_t sarray_len, ngx_str_t **sarray)
@@ -466,14 +467,15 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
                   "rrd_update_r (%s, NULL, 1, %s)", rrd_conf->db_name_cstyle,
                   rrd_value);
     rrd_clear_error();
-    /* TODO: fix potential problem wih db_name.data not null-terminated */
     rrd_rc = rrd_update_r(rrd_conf->db_name_cstyle, NULL,
                           1, (const char **)&rrd_value);
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
                   "rrd_update_r returned: %d", rrd_rc);
     ngx_int_t rc;
     if (rrd_rc < 0) {
-//        char * rrd_err = rrd_get_error(); TODO
+        char * rrd_err = rrd_get_error();
+        ngx_log_error(NGX_LOG_ALERT, log, 0,
+                       "Problem on rrd_update_r: %s", rrd_err);
         ngx_str_t val;
         val.data = rrd_value;
         val.len = copy_idx - rrd_value;
@@ -497,7 +499,6 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
                                             char* db_name) {
     char** argv = NULL;
     *argc = -1;
-    /* TODO:null-terminated ngx_str, check rc, call rrd_info_free. */
     /*  rrd_info_r doesn't do the job for me: it makes the info human readable
      * and I need it computer-readable. It does somehting I would have to
      * undo by crappy parsing code. Instead, I directly use the structure and
@@ -606,6 +607,9 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
     int rrd_argc = -1;
     char** rrd_arg = ngx_http_rrd_create_graph_arg(&rrd_argc, r->pool,
                                &temp_file.name, rrd_conf->db_name_cstyle);
+    if (NULL == rrd_arg) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
     char    **calcpr;
     int       xsize, ysize;
     double    ymin, ymax;

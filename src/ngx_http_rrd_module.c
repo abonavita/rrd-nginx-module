@@ -161,8 +161,6 @@ ngx_http_rrd_directive(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 /* The messages (OK, errors) that can be sent by this module. Note that
  * the important thing returned is the status (this is a REST-like API).
  */
-static ngx_str_t ERR_GRAPH_MSG =
-        ngx_string("Problem graphing database.");
 #define ERR_BAD_METHOD_MSG_CSTR "rrd module supports only GET and POST verbs."
 static ngx_str_t ERR_BAD_METHOD_MSG =
         ngx_string(ERR_BAD_METHOD_MSG_CSTR);
@@ -249,39 +247,6 @@ static ngx_int_t ngx_http_rrd_outprintf(ngx_http_request_t *r,
     if (rc != NGX_OK) {
         ngx_log_error(NGX_LOG_ALERT, log, 0,
                               "pb sending header @ngx_http_rrd_outprintf");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    return ngx_http_output_filter(r, out_chain);
-}
-/*
- * Helper function to send an array of ngx_str as response to a request.
- * TODO : Kill
- */
-static ngx_int_t ngx_http_rrd_output_200(ngx_http_request_t *r,
-                                  ngx_uint_t sarray_len, ngx_str_t **sarray)
-{
-	ngx_log_t *log = r->connection->log;
-    ngx_chain_t *out_chain = ngx_http_rrd_create_chain(r->pool,
-                                                       sarray_len, sarray);
-    if (NULL == out_chain) {
-        /* nothing else I can do... */
-        ngx_log_error(NGX_LOG_ALERT, log, 0,
-                              "memory alloc pb @ngx_http_rrd_body_received");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_int_t rc;
-    r->headers_out.status = NGX_HTTP_OK;
-    /* Figure out size of content. */
-    ngx_uint_t i, content_length = 0;
-    for (i = 0; i<sarray_len; i++){
-        content_length += sarray[i]->len;
-    }
-    r->headers_out.content_length_n = content_length;
-    rc = ngx_http_send_header(r);
-    if (rc != NGX_OK) {
-        ngx_log_error(NGX_LOG_ALERT, log, 0,
-                              "pb sending header @ngx_http_rrd_body_received");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -381,6 +346,7 @@ ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r)
     ngx_log_t *log = r->connection->log;
     ngx_int_t rc;
 
+    /* TODO : use ngx_http_test_content_type or explain why not. */
     if (r->headers_in.content_type == NULL
             || r->headers_in.content_type->value.data == NULL
             || r->headers_in.content_type->value.len != WWW_FORM_URLENCODED.len
@@ -437,7 +403,8 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
     u_char* copy_idx;
     /*  In theory I should check for the size of the body to avoid loading
      * too much stuff in memory. However this is already handled by nginx
-     * client_max_body_size.
+     * client_max_body_size. If the admin thinks it's taking too much memory
+     * he/she should use client_max_body_size.
      */
     u_char* rrd_value = copy_idx =
             ngx_palloc(r->pool, r->headers_in.content_length_n);
@@ -633,6 +600,7 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
     ngx_int_t rc;
     temp_file.fd = NGX_INVALID_FILE;
     temp_file.log = r->connection->log;
+    temp_file.directio = 1;
     /* Persistent needed to retrieve size and clean afterwards. */
     rc = ngx_create_temp_file(&temp_file, rrd_conf->rrd_image_temp_path, r->pool,
                               1, 1, 0);
@@ -653,14 +621,15 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
     rrd_clear_error();
     int rrd_rc = rrd_graph(rrd_argc, rrd_arg,
                            &calcpr, &xsize, &ysize, NULL, &ymin, &ymax);
-    ngx_http_rrd_free_graph_arg(r->pool, rrd_argc, rrd_arg);
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0,
                   "rrd_graph (%s, %s, %s, %s) returned %d.",
                   rrd_arg[0], rrd_arg[1], rrd_arg[2], rrd_arg[3],
                   rrd_rc);
+    ngx_http_rrd_free_graph_arg(r->pool, rrd_argc, rrd_arg);
     if (rrd_rc < 0) {
-        ngx_str_t* out_str[] = {&ERR_GRAPH_MSG};
-        return ngx_http_rrd_output_200(r, sizeof(out_str)/sizeof(ngx_str_t*), out_str);
+        return ngx_http_rrd_outprintf(r, NGX_HTTP_INTERNAL_SERVER_ERROR,
+                        "Error graphing DB %s: %s", rrd_conf->db_name_cstyle,
+                        rrd_get_error());
     } else {
         return ngx_http_rrd_png_file_200(r, &temp_file);
     }

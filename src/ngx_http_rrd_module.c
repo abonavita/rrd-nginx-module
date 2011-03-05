@@ -416,6 +416,8 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
     u_char* p;
     /* TODO: rewrite this to first READ in mem, then look for = and urldecode*/
     ngx_int_t looking_for_eq = 1;
+    /* Needed for pipelined requests in HTTP/1.1 which can all be in one buf. */
+    ngx_int_t left_in_contentlength = r->headers_in.content_length_n;
     do {
         ngx_buf_t *temp_buf;
         if (body_chain->buf->in_file) {
@@ -444,10 +446,11 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
             temp_buf = body_chain->buf;
         }
         p = temp_buf->start;
-        while (p!=temp_buf->last && looking_for_eq) {
+        while (p!=temp_buf->last && looking_for_eq && left_in_contentlength>0) {
             if ('=' == *(p++)) {
                 looking_for_eq = 0;
             }
+            left_in_contentlength--;
         }
         if (!looking_for_eq) {
             u_char *dst = copy_idx;
@@ -457,7 +460,17 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
              *  percent-encoded string (which is unlikely to happen I would
              *  say. Should try to unit test this situation.
              */
-            ngx_unescape_uri(&dst, &src, temp_buf->last - p, 0);
+            /*  We'll copy only what's left in buffer or what's left in
+             * content-length.
+             */
+            size_t size_to_copy;
+            if (left_in_contentlength < temp_buf->last - p) {
+                size_to_copy = left_in_contentlength;
+            } else {
+                size_to_copy = temp_buf->last - p;
+            }
+            ngx_unescape_uri(&dst, &src, size_to_copy, 0);
+            left_in_contentlength -= size_to_copy;
             copy_idx = dst;
         }
         body_chain = body_chain->next;

@@ -505,6 +505,22 @@ void ngx_http_rrd_body_received(ngx_http_request_t *r)
     ngx_http_finalize_request(r, rc);
 }
 
+/* Number of vectors in the RGB space to use to assign colors to lines. */
+u_char COLOR_VECTOR_COUNT = 7;
+
+/*
+ *  Figure out the color (as a 24 bit integer) of the elt_rank-th element,
+ * provided a "color width" as a 8 bit integer.
+ */
+ngx_uint_t ngx_http_rrd_color(uint elt_rank, u_char color_width) {
+    /* Add one to avoid using the (0,0,0) color vector */
+    u_char shifted_rank = (elt_rank % COLOR_VECTOR_COUNT) + 1;
+    return (255 - elt_rank / COLOR_VECTOR_COUNT*256/color_width)
+           * (65536 * (shifted_rank & 4)
+              + 256 * (shifted_rank & 2)
+              +   1 * (shifted_rank & 1));
+
+}
 /*
  *  Returns an array of char* that can be passed to rrd_graph. Returns
  * NULL in case of failure. argc parameter is modified to indicate the
@@ -532,7 +548,7 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
                        rrd_get_error());
         goto rrd_err_free;
     }
-    int ds_count = rrd.stat_head->ds_cnt;
+    uint ds_count = rrd.stat_head->ds_cnt;
     char* first_cf = rrd.rra_def[0].cf_nam;
     *argc = 2 + 2 * ds_count; /* "graph"+png_filename+2 args by datasource */
     argv = ngx_palloc(pool, (*argc) * sizeof(char *));
@@ -561,10 +577,12 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
     c_temp_file_name[temp_file_name->len] = '\x0';
     argv[1] = c_temp_file_name;
 
-    int i;
-    int c_str_size;
-    int first_cf_len = strlen(first_cf);
-    int db_name_len = strlen(db_name);
+    uint i;
+    uint c_str_size;
+    uint first_cf_len = strlen(first_cf);
+    uint db_name_len = strlen(db_name);
+    /* Add one to avoid division by 0 */
+    u_char color_width = ds_count / COLOR_VECTOR_COUNT + 1;
     for (i = 0; i<ds_count && i<99; i++) {
         c_str_size = 7+2+1+db_name_len+1+strlen(rrd.ds_def[i].ds_nam)+1+first_cf_len+1;
         u_char* c_def_val_i =
@@ -579,7 +597,8 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
         u_char* c_draw_val_i =
                 ngx_palloc(pool, (c_str_size) * sizeof(char));
         last = ngx_slprintf(c_draw_val_i, c_draw_val_i+c_str_size-1,
-                            "LINE2:val%02i#FF0000", i);
+                            "LINE2:val%02i#%06Xui",
+                            i, ngx_http_rrd_color(i, color_width));
         *last = '\x0';
         argv[3+i*2] = (char*) c_draw_val_i;
     }

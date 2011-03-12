@@ -132,3 +132,27 @@ Content-type: application/x-www-form-urlencoded
 value=N%3A12345", "GET /rrd/taratata"]
 --- response_body_like: go round.*Robin.*\x89PNG
 --- error_code: 200
+
+=== TEST 10: POST show buffers
+Request specially crafted to produce 2 buffers in the body received
+handler (one with the beginning of the entity read with the headers
+and one with the rest of the body).
+--- config
+    location /rrd/taratata {
+        rrd /var/rrd/taratata.rrd;
+    }
+--- raw_request eval
+use URI::Escape;
+my $val="value=N%3A12345%3A678".("678"x300);
+["POST /rrd/taratata HTTP/1.1\r
+Host: localhost\r
+Connection: Close\r
+Content-Type: application/x-www-form-urlencoded\r
+Content-Length:".length($val)."\r\n\r\n",
+substr($val, 0, 6),
+substr($val, 6, 15),
+substr($val, 21)]
+--- raw_request_middle_delay
+1
+--- response_body_like: Problem .*updating
+--- error_code: 500

@@ -578,27 +578,29 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
     argv[1] = c_temp_file_name;
 
     uint i;
-    uint c_str_size;
-    uint first_cf_len = strlen(first_cf);
-    uint db_name_len = strlen(db_name);
+    size_t c_str_size;
+    size_t first_cf_len = strlen(first_cf);
+    size_t db_name_len = strlen(db_name);
     /* Add one to avoid division by 0 */
     u_char color_width = ds_count / COLOR_VECTOR_COUNT + 1;
     for (i = 0; i<ds_count && i<99; i++) {
-        c_str_size = 7+2+1+db_name_len+1+strlen(rrd.ds_def[i].ds_nam)+1+first_cf_len+1;
+        size_t ds_name_len = strlen(rrd.ds_def[i].ds_nam);
+        char* ds_name = rrd.ds_def[i].ds_nam;
+        c_str_size = 7 + 2 + 1 + db_name_len + 1 + ds_name_len +1+first_cf_len+1;
         u_char* c_def_val_i =
                 ngx_palloc(pool, (c_str_size) * sizeof(char));
         u_char* last = ngx_slprintf(c_def_val_i, c_def_val_i+c_str_size-1,
-                             "DEF:val%02i=%s:%s:%s", i, db_name, rrd.ds_def[i].ds_nam,
+                             "DEF:val%02i=%s:%s:%s", i, db_name, ds_name,
                              first_cf);
         *last = '\x0';
         argv[2+i*2] = (char*) c_def_val_i;
 
-        c_str_size = 9+2+7+1;
+        c_str_size = 9+2+1+6+1+ds_name_len+1;
         u_char* c_draw_val_i =
                 ngx_palloc(pool, (c_str_size) * sizeof(char));
         last = ngx_slprintf(c_draw_val_i, c_draw_val_i+c_str_size-1,
-                            "LINE2:val%02i#%06Xui",
-                            i, ngx_http_rrd_color(i, color_width));
+                            "LINE2:val%02i#%06Xui:%s",
+                            i, ngx_http_rrd_color(i, color_width), ds_name);
         *last = '\x0';
         argv[3+i*2] = (char*) c_draw_val_i;
     }

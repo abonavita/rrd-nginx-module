@@ -130,7 +130,7 @@ cache-control (see above).
 Content-type: application/x-www-form-urlencoded
 --- pipelined_requests eval
 ["POST /rrd/taratata
-value=N%3A12345", "GET /rrd/taratata"]
+value=".uri_escape("N:12345"), "GET /rrd/taratata"]
 --- response_body_like: go round.*Robin.*\x89PNG
 --- error_code: 200
 
@@ -144,7 +144,7 @@ and one with the rest of the body).
     }
 --- raw_request eval
 use URI::Escape;
-my $val="value=N%3A12345%3A678".("678"x300);
+my $val="value=".uri_escape("N:12345:678").("678"x300);
 ["POST /rrd/taratata HTTP/1.1\r
 Host: localhost\r
 Connection: Close\r

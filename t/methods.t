@@ -111,10 +111,11 @@ Used to be a problem because the rrd library was not called properly
 --- more_headers
 Content-type: application/x-www-form-urlencoded
 --- pipelined_requests eval
+use URI::Escape;
 ["POST /rrd/taratata
-value=N%3A12345", "POST /rrd/taratata
-value=N%3Awhetever", "POST /rrd/taratata
-value=N%3A12345"]
+value=".uri_escape("N:12345"), "POST /rrd/taratata
+value=".uri_escape("N:whatever"), "POST /rrd/taratata
+value=".uri_escape("N:12345")]
 --- response_body_like: Robin.*Problem.*Robin
 --- error_code: 200
 

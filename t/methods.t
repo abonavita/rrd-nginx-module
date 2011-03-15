@@ -14,9 +14,9 @@ __DATA__
     location /rrd/taratata {
         rrd /var/rrd/taratata.rrd;
     }
---- request_eval
-"PUT /rrd/taratata
-name=daniel"
+--- request
+PUT /rrd/taratata
+name=daniel
 --- response_body_like: support.*GET.*POST
 --- error_code: 405
 
@@ -51,7 +51,7 @@ The main case (when everything submitted is GOOD and the DB should be updated).
     }
 --- more_headers
 Content-type: application/x-www-form-urlencoded
---- request_eval
+--- request eval
 use URI::Escape;
 "POST /rrd/taratata
 value=".uri_escape("N:12345")
@@ -91,7 +91,7 @@ creation of temp file for body.
     }
 --- more_headers
 Content-type: application/x-www-form-urlencoded
---- request_eval
+--- request eval
 use URI::Escape;
 "POST /rrd/taratata
 value=".(uri_escape("N:12:34:56:78")x20000)."value="

@@ -269,12 +269,15 @@ ngx_int_t ngx_http_rrd_update_database(ngx_http_request_t *r)
     ngx_log_t *log = r->connection->log;
     ngx_int_t rc;
 
-    /* TODO : use ngx_http_test_content_type or explain why not. */
+    /* One could think of using ngx_http_test_content_type (I did) but this
+     * is irrelevant as ngx_http_test_content_type works on the response
+     * content type, not the request. On top of that, there is really
+     * no need to go through a hash-table to check ONE value. */
     if (r->headers_in.content_type == NULL
             || r->headers_in.content_type->value.data == NULL
             || r->headers_in.content_type->value.len != WWW_FORM_URLENCODED.len
             || ngx_strncasecmp(r->headers_in.content_type->value.data,
-                    (u_char *) WWW_FORM_URLENCODED.data,
+                    WWW_FORM_URLENCODED.data,
                     WWW_FORM_URLENCODED.len) != 0)
     {
         ngx_log_error(NGX_LOG_ALERT, log, 0,

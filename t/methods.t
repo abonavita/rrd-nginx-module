@@ -149,8 +149,7 @@ my $val="value=".uri_escape("N:12345:678").("678"x300);
 Host: localhost\r
 Connection: Close\r
 Content-Type: application/x-www-form-urlencoded\r
-Content-Length:".length($val)."\r\n\r\n",
-substr($val, 0, 6),
+Content-Length:".length($val)."\r\n\r\n".substr($val, 0, 6),
 substr($val, 6, 15),
 substr($val, 21)]
 --- raw_request_middle_delay

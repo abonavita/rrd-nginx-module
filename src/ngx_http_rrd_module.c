@@ -70,10 +70,14 @@ static ngx_command_t  ngx_http_rrd_commands[] = {
       ngx_null_command
 };
 
+/* The argument accepted for GETs */
+static ngx_str_t ARG_START = ngx_string("arg_start");
+static ngx_uint_t ARG_START_KEY;
 /*
  *  Called once per process to initialize the rrd lib.
  */
 static ngx_int_t ngx_http_rrd_init_process(ngx_cycle_t *cycle) {
+    ARG_START_KEY = ngx_hash_key(ARG_START.data, ARG_START.len);
     rrd_get_context();
     ngx_log_error_core(NGX_DEBUG, cycle->log, 0, "rrd: init");
     return NGX_OK;
@@ -453,9 +457,11 @@ ngx_uint_t ngx_http_rrd_color(uint elt_rank, u_char color_width) {
  * number of arguments actually present in the returned array (because
  * this depends on the data structure).
  */
-static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
+static char** ngx_http_rrd_create_graph_arg(int* argc,
+                                            ngx_http_request_t* r,
                                             char* db_name) {
     char** argv = NULL;
+    ngx_pool_t* pool = r->pool;
     *argc = -1;
     /*  rrd_info_r doesn't do the job for me: it makes the info human readable
      * and I need it computer-readable. It does something I would have to
@@ -475,7 +481,10 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
     }
     uint ds_count = rrd.stat_head->ds_cnt;
     char* first_cf = rrd.rra_def[0].cf_nam;
-    *argc = 2 + 2 * ds_count; /* "graph"+png_filename+2 args by datasource */
+    /* Was there a ?start in the request ? */
+    ngx_http_variable_value_t* sv = ngx_http_get_variable(r, &ARG_START, ARG_START_KEY);
+    *argc = 2 + 2 * ds_count + (sv->not_found ? 0 : 2);
+    /* "graph"+png_filename+2 args by datasource+2 args if ?start specified */
     argv = ngx_palloc(pool, (*argc) * sizeof(char *));
     if (NULL == argv) {
         ngx_log_error(NGX_LOG_ALERT, pool->log, 0,
@@ -489,6 +498,14 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
      */
     argv[1] = "-";
 
+    uint first_arg = 2;
+    if (!sv->not_found) {
+        argv[first_arg++] = "-s";
+        argv[first_arg] = ngx_palloc(pool, (sv->len + 1) * sizeof(char));
+        ngx_memcpy(argv[first_arg], sv->data, sv->len);
+        argv[first_arg][sv->len] = '\x0';
+        first_arg++;
+    }
     uint i;
     size_t c_str_size;
     size_t first_cf_len = strlen(first_cf);
@@ -505,7 +522,7 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
                              "DEF:val%02i=%s:%s:%s", i, db_name, ds_name,
                              first_cf);
         *last = '\x0';
-        argv[2+i*2] = (char*) c_def_val_i;
+        argv[first_arg+i*2] = (char*) c_def_val_i;
 
         c_str_size = 9+2+1+6+1+ds_name_len+1;
         u_char* c_draw_val_i =
@@ -514,7 +531,7 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
                             "LINE2:val%02i#%06Xui:%s",
                             i, ngx_http_rrd_color(i, color_width), ds_name);
         *last = '\x0';
-        argv[3+i*2] = (char*) c_draw_val_i;
+        argv[first_arg+1+i*2] = (char*) c_draw_val_i;
     }
   rrd_err_close:
     rrd_close(rrd_file);
@@ -524,7 +541,12 @@ static char** ngx_http_rrd_create_graph_arg(int* argc, ngx_pool_t* pool,
 }
 static void ngx_http_rrd_free_graph_arg(ngx_pool_t* pool, int argc, char** argv) {
     int i;
-    for (i=1;i<argc;i++) {
+    for (i=2;i<argc;i++) {
+        /* We might try to free static data in case of ?start= but it does
+         * not come from the pool so it is unlikely to cause any problem
+         * besides the fact that it is in a section that is probably not even
+         * writable.
+         */
         ngx_pfree(pool, argv[i]);
     }
     if (argc > 0) {
@@ -543,7 +565,7 @@ static ngx_int_t ngx_http_rrd_show_graph(ngx_http_request_t *r)
 
     /* Prepare args for rrdgraph */
     int rrd_argc = -1;
-    char** rrd_arg = ngx_http_rrd_create_graph_arg(&rrd_argc, r->pool,
+    char** rrd_arg = ngx_http_rrd_create_graph_arg(&rrd_argc, r,
                                                    rrd_conf->db_name_cstyle);
     if (NULL == rrd_arg) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;

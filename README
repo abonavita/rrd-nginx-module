@@ -1,0 +1,17 @@
+This is a nginx module that aims at providing a simple REST-like interface
+to a RRD database.
+
+First, you configure a nginx location to a database.
+  location = /rrd/taratata {
+    rrd /var/rrd/taratata.rrd;
+  }
+
+Then, you push values there with POST. Something like:
+  curl --data-urlencode value=N:123456 http://localhost:8000/rrd/taratata
+which should give you the following response if everything went well:
+  Updated /var/rrd/taratata.rrd. You make the rock-n-roll go round, Robin.
+
+And if you point your pointer at the location (i.e. you perform a GET), the
+module will send you a PNG graph of your RRD.
+
+Enjoy.

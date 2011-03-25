@@ -483,7 +483,7 @@ static char** ngx_http_rrd_create_graph_arg(int* argc,
     char* first_cf = rrd.rra_def[0].cf_nam;
     /* Was there a ?start in the request ? */
     ngx_http_variable_value_t* sv = ngx_http_get_variable(r, &ARG_START, ARG_START_KEY);
-    *argc = 2 + 2 * ds_count + (sv->not_found ? 0 : 2);
+    *argc = 2 + 2 * ds_count + (sv != NULL && sv->not_found ? 0 : 2);
     /* "graph"+png_filename+2 args by datasource+2 args if ?start specified */
     argv = ngx_palloc(pool, (*argc) * sizeof(char *));
     if (NULL == argv) {
@@ -499,7 +499,7 @@ static char** ngx_http_rrd_create_graph_arg(int* argc,
     argv[1] = "-";
 
     uint first_arg = 2;
-    if (!sv->not_found) {
+    if (sv != NULL && !sv->not_found) {
         argv[first_arg++] = "-s";
         argv[first_arg] = ngx_palloc(pool, (sv->len + 1) * sizeof(char));
         ngx_memcpy(argv[first_arg], sv->data, sv->len);

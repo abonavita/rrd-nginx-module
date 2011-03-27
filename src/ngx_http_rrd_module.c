@@ -79,7 +79,7 @@ static ngx_uint_t ARG_START_KEY;
 static ngx_int_t ngx_http_rrd_init_process(ngx_cycle_t *cycle) {
     ARG_START_KEY = ngx_hash_key(ARG_START.data, ARG_START.len);
     rrd_get_context();
-    ngx_log_error_core(NGX_DEBUG, cycle->log, 0, "rrd: init");
+    ngx_log_error_core(NGX_LOG_DEBUG, cycle->log, 0, "rrd: init");
     return NGX_OK;
 }
 

@@ -9,6 +9,19 @@ ngx_feature_libs='-lrrd_th'
 ngx_feature_test='rrd_info_r("/tmp/invalid_rrd");'
 . auto/feature
 
+if [ $ngx_found = no ]; then
+    # FreeBSD port
+    ngx_feature="RRD library in /usr/local/"
+    ngx_feature_path="/usr/local/include"
+
+    if [ $NGX_RPATH = YES ]; then
+        ngx_feature_libs="-R/usr/local/lib -L/usr/local/lib -lrrd_th"
+    else
+        ngx_feature_libs="-L/usr/local/lib -lrrd_th"
+    fi
+    . auto/feature
+fi
+
 if [ $ngx_found = yes ]; then
     CORE_LIBS="$CORE_LIBS $ngx_feature_libs"
 else
@@ -23,4 +36,4 @@ fi
 
 HTTP_MODULES="$HTTP_MODULES ngx_http_rrd_module"
 NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/src/ngx_http_rrd_module.c"
-CFLAGS=`echo ${CFLAGS} | sed -e /-Werror/-Wno-deprecated-declarations -Werror/`
+CFLAGS=`echo ${CFLAGS} | sed -e 's/-Werror/-Wno-deprecated-declarations -Werror/'`

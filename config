@@ -1,5 +1,26 @@
 ngx_addon_name=rrd-nginx-module
+
+ngx_feature='RRD library'
+ngx_feature_name=
+ngx_feature_run=yes
+ngx_feature_incs='#include <rrd.h>'
+ngx_feature_path=
+ngx_feature_libs='-lrrd_th'
+ngx_feature_test='rrd_info_r("/tmp/invalid_rrd");'
+. auto/feature
+
+if [ $ngx_found = yes ]; then
+    CORE_LIBS="$CORE_LIBS $ngx_feature_libs"
+else
+    cat << END
+
+$0: error: the RRD module requires the RRD multi-threaded
+library. You can either not enable the module or install the library.
+
+END
+    exit 1
+fi
+
 HTTP_MODULES="$HTTP_MODULES ngx_http_rrd_module"
 NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/src/ngx_http_rrd_module.c"
-CORE_LIBS="$CORE_LIBS -lrrd_th"
 CFLAGS="${CFLAGS/-Werror/-Wno-deprecated-declarations -Werror}"

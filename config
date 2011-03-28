@@ -23,4 +23,4 @@ fi
 
 HTTP_MODULES="$HTTP_MODULES ngx_http_rrd_module"
 NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/src/ngx_http_rrd_module.c"
-CFLAGS="${CFLAGS/-Werror/-Wno-deprecated-declarations -Werror}"
+CFLAGS=`echo ${CFLAGS} | sed -e /-Werror/-Wno-deprecated-declarations -Werror/`
